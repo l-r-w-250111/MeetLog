@@ -1,8 +1,11 @@
 import streamlit as st
 import os
 import tempfile
+import time
 from main import create_transcript
 from speaker_manager import save_profile, load_profiles, update_profiles_status
+from audio_recorder import list_input_devices, AudioRecorder
+from realtime_transcriber import RealtimeTranscriber
 
 def format_transcript(transcript: list, speaker_name_map: dict) -> str:
     """
@@ -153,3 +156,98 @@ if st.session_state.unrecognized_speakers and len(st.session_state.unrecognized_
             else:
                 st.warning("No names were entered to save.")
 
+
+# --- Real-time Transcription Section ---
+st.header("Real-time Transcription")
+st.write(
+    "Select an audio device and start recording. The transcript will be generated in real-time. "
+    "Note: System audio on macOS may require a virtual audio device like BlackHole."
+)
+
+# Initialize session state for real-time components
+if 'is_recording' not in st.session_state:
+    st.session_state.is_recording = False
+if 'recorder' not in st.session_state:
+    st.session_state.recorder = None
+if 'transcriber' not in st.session_state:
+    st.session_state.transcriber = None
+if 'realtime_transcript_display' not in st.session_state:
+    st.session_state.realtime_transcript_display = ""
+# This flag controls the periodic rerun loop
+if 'run_realtime_loop' not in st.session_state:
+    st.session_state.run_realtime_loop = False
+
+# UI for Real-time Section
+try:
+    input_devices = list_input_devices()
+except Exception as e:
+    input_devices = None
+    st.error(f"Could not list audio devices. Please ensure 'portaudio' is installed (e.g., `sudo apt-get install portaudio19-dev` or `brew install portaudio`). Error: {e}")
+
+if input_devices:
+    device_options = list(input_devices.keys())
+    selected_device_name = st.selectbox(
+        "Select an audio input device", options=device_options, key="realtime_device_select"
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("Start Recording", key="start_recording_btn", disabled=st.session_state.is_recording):
+            device_index = input_devices[selected_device_name]
+            # Use the model size selected in the file-based UI section
+            st.session_state.transcriber = RealtimeTranscriber(model_size=model_size)
+            st.session_state.recorder = AudioRecorder(device_index=device_index)
+
+            st.session_state.recorder.start()
+            st.session_state.is_recording = True
+            st.session_state.run_realtime_loop = True
+            st.rerun()
+
+    with col2:
+        if st.button("Stop Recording", key="stop_recording_btn", disabled=not st.session_state.is_recording):
+            st.session_state.run_realtime_loop = False  # Signal the loop to stop
+            if st.session_state.recorder:
+                st.session_state.recorder.stop()
+            st.session_state.is_recording = False
+            st.info("Recording stopped. Finalizing transcript...")
+
+            # Perform one last processing call to get any remaining audio
+            if st.session_state.transcriber and st.session_state.recorder:
+                final_transcript_data = st.session_state.transcriber.process_audio(st.session_state.recorder)
+                lines = [f"[{e['start']}s - {e['end']}s] {e['speaker']}: {e['text']}" for e in final_transcript_data]
+                st.session_state.realtime_transcript_display = "\n".join(lines)
+
+            st.rerun()
+
+    # Display area for real-time transcript
+    st.write("Live Transcript:")
+    transcript_placeholder = st.empty()
+    transcript_placeholder.text_area(
+        "Transcript will appear here...",
+        value=st.session_state.realtime_transcript_display,
+        height=300,
+        key="realtime_transcript_area"
+    )
+
+    # The "pseudo-real-time" loop logic, controlled by the run_realtime_loop flag
+    if st.session_state.get('run_realtime_loop', False):
+        st.info("🔴 Recording... Transcript will update every 5 seconds.")
+
+        try:
+            if st.session_state.transcriber and st.session_state.recorder:
+                current_transcript_data = st.session_state.transcriber.process_audio(st.session_state.recorder)
+                lines = [f"[{e['start']}s - {e['end']}s] {e['speaker']}: {e['text']}" for e in current_transcript_data]
+                st.session_state.realtime_transcript_display = "\n".join(lines)
+
+            # Wait and then trigger a rerun to refresh the UI and run this block again
+            time.sleep(5)
+            st.rerun()
+
+        except Exception as e:
+            st.error(f"An error occurred during real-time transcription: {e}")
+            st.session_state.run_realtime_loop = False
+            st.session_state.is_recording = False
+            if st.session_state.recorder:
+                st.session_state.recorder.stop()
+            st.rerun()

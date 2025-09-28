@@ -1,0 +1,13 @@
+# Core application dependencies
+streamlit
+pydub
+python-dotenv
+torch
+torchaudio
+numpy
+pyannote.audio
+openai-whisper
+
+# Dependencies for real-time audio recording
+sounddevice
+scipy
