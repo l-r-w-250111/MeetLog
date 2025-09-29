@@ -39,16 +39,21 @@ class AudioRecorder:
         self.is_recording = False
         self.stream = None
         self.audio_buffer = []
+        self.latest_volume = 0.0  # To store the volume of the most recent chunk
         self.lock = threading.Lock()
 
     def _callback(self, indata: np.ndarray, frames: int, time, status):
         """
         This is called by the sounddevice stream for each new audio chunk.
+        It also calculates the volume of the chunk.
         """
         if status:
-            print(f"Recording status: {status}")
+            print(f"Audio callback status: {status}")
         with self.lock:
             self.audio_buffer.append(indata.copy())
+            # Calculate the RMS of the chunk to represent volume
+            volume_rms = np.sqrt(np.mean(indata**2))
+            self.latest_volume = float(volume_rms)
 
     def start(self):
         """
@@ -87,20 +92,33 @@ class AudioRecorder:
         self.is_recording = False
         print("Recording stopped.")
 
+    def get_latest_volume(self) -> float:
+        """
+        Returns the volume (RMS) of the most recent audio chunk.
+        This can be used for a real-time volume meter.
+        """
+        with self.lock:
+            return self.latest_volume
+
     def get_wav_data(self) -> bytes:
         """
         Returns the entire recorded audio buffer as WAV formatted bytes.
+        The lock is held only for the brief moment of copying the buffer list
+        to avoid blocking the audio callback for an extended time.
 
         Returns:
             A bytes object containing the audio in WAV format. Returns None if
             there is no audio data.
         """
         with self.lock:
-            if not self.audio_buffer:
-                return None
+            # Quickly copy the list of chunks under lock
+            audio_chunks = list(self.audio_buffer)
 
-            # Concatenate all the chunks in the buffer
-            full_audio = np.concatenate(self.audio_buffer, axis=0)
+        if not audio_chunks:
+            return None
+
+        # Perform the potentially slow concatenation outside the lock
+        full_audio = np.concatenate(audio_chunks, axis=0)
 
         # Normalize to 16-bit PCM
         audio_int16 = np.int16(full_audio * 32767)

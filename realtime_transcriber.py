@@ -9,93 +9,51 @@ import numpy as np
 from audio_recorder import AudioRecorder
 from diarize import perform_diarization
 from transcribe import transcribe_audio_chunk
-from speaker_manager import load_profiles
-from main import recognize_speakers # Use the refactored function
 
 class RealtimeTranscriber:
     """
     Manages the real-time transcription process by periodically processing
-    audio from an AudioRecorder.
+    audio from an AudioRecorder. This class is responsible for diarization
+    and transcription of new audio segments, but not for speaker recognition,
+    which is handled by the UI layer.
     """
     def __init__(self, model_size: str = "base"):
         self.model_size = model_size
         self.last_processed_end_time = 0.0  # in seconds
-        self.transcript = []
-        self.speaker_map = {}  # Maps temp labels (SPEAKER_00) to persistent names
-        self.unrecognized_embeddings = {} # Stores embeddings of new speakers found in this session
-        self.known_profiles = self._load_active_profiles()
+        self.transcript = []  # Stores segments with raw speaker labels (e.g., 'SPEAKER_00')
         print("RealtimeTranscriber initialized.")
-        print(f"Loaded {len(self.known_profiles)} active profiles.")
 
-    def _load_active_profiles(self):
-        """Loads active speaker profiles."""
-        all_profiles = load_profiles()
-        return {
-            name: data for name, data in all_profiles.items() if data.get('is_active', True)
-        }
-
-    def _update_speaker_mapping(self, new_embeddings: dict):
+    def process_audio(self, recorder: AudioRecorder) -> tuple[list, dict]:
         """
-        Matches new speaker embeddings with known profiles and previously
-        unrecognized speakers to maintain consistency.
-        """
-        # Create a combined pool of speakers to match against: saved profiles + speakers found in this session
-        profiles_to_match = self.known_profiles.copy()
-        for name, embedding in self.unrecognized_embeddings.items():
-            profiles_to_match[name] = {'embedding': embedding}
+        Processes the latest audio from the recorder, transcribes only the new
+        segments, and returns the full transcript and speaker embeddings.
 
-        # Filter out embeddings for speakers we have already identified
-        unmapped_embeddings = {
-            label: emb for label, emb in new_embeddings.items() if label not in self.speaker_map
-        }
+        Args:
+            recorder (AudioRecorder): The audio recorder instance.
 
-        if not unmapped_embeddings:
-            return
-
-        # Use the centralized function to get matches and new unrecognized speakers
-        label_map, newly_unrecognized = recognize_speakers(unmapped_embeddings, profiles_to_match)
-
-        # Update our session's speaker map with the results
-        for temp_label, final_name in label_map.items():
-            # If the name is one of the temporary labels, it means it's a new speaker
-            if final_name in newly_unrecognized:
-                session_speaker_name = f"Speaker {len(self.unrecognized_embeddings) + 1}"
-                self.speaker_map[temp_label] = session_speaker_name
-                # Add to our session's list of unrecognized speakers for future checks
-                self.unrecognized_embeddings[session_speaker_name] = newly_unrecognized[final_name]
-                print(f"Identified new session speaker: {session_speaker_name} (was {temp_label})")
-            else:
-                # The speaker was matched to an existing profile
-                self.speaker_map[temp_label] = final_name
-                print(f"Matched {temp_label} to existing speaker: {final_name}")
-
-
-    def process_audio(self, recorder: AudioRecorder) -> list:
-        """
-        Processes the latest audio from the recorder, updates the transcript,
-        and returns the full transcript.
+        Returns:
+            A tuple containing:
+            - The full transcript data with raw speaker labels.
+            - A dictionary of all speaker embeddings from the latest diarization run.
         """
         wav_data = recorder.get_wav_data()
         if not wav_data:
-            return self.transcript
+            return self.transcript, {}
 
         # Diarization requires a file path, so we use a temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
             tmp_path = tmp_file.name
             tmp_file.write(wav_data)
 
+        speaker_embeddings = {}
         try:
             # 1. Perform diarization on the entire audio recorded so far
             print("\nProcessing audio buffer for diarization...")
             diarization_segments, speaker_embeddings = perform_diarization(tmp_path)
             if not diarization_segments:
-                print("No segments found in current audio buffer.")
-                return self.transcript
+                return self.transcript, speaker_embeddings
 
-            # 2. Update speaker mapping with any new speakers found
-            self._update_speaker_mapping(speaker_embeddings)
-
-            # 3. Transcribe only new segments
+            # 2. Transcribe only new segments
             audio = AudioSegment.from_wav(tmp_path)
 
             new_segments_to_transcribe = [
@@ -103,8 +61,7 @@ class RealtimeTranscriber:
             ]
 
             if not new_segments_to_transcribe:
-                print("No new segments to transcribe.")
-                return self.transcript
+                return self.transcript, speaker_embeddings
 
             print(f"Found {len(new_segments_to_transcribe)} new segments to transcribe.")
 
@@ -130,12 +87,12 @@ class RealtimeTranscriber:
 
                 try:
                     transcribed_text = transcribe_audio_chunk(chunk_filename, model_size=self.model_size)
-                    speaker_name = self.speaker_map.get(segment['speaker'], segment['speaker'])
 
+                    # Append with the raw speaker label; recognition is handled by the caller
                     self.transcript.append({
                         "start": f"{start_s:.2f}",
                         "end": f"{end_s:.2f}",
-                        "speaker": speaker_name,
+                        "speaker": segment['speaker'], # Raw label (e.g., 'SPEAKER_00')
                         "text": transcribed_text
                     })
                 except Exception as e:
@@ -143,6 +100,7 @@ class RealtimeTranscriber:
 
             shutil.rmtree(temp_chunk_dir)
 
+            # Update the processed time and sort the transcript
             self.last_processed_end_time = diarization_segments[-1]['end']
             self.transcript.sort(key=lambda x: float(x['start']))
 
@@ -152,10 +110,14 @@ class RealtimeTranscriber:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
 
-        return self.transcript
+        return self.transcript, speaker_embeddings
 
 if __name__ == '__main__':
+    # This test script needs to be updated to reflect the new return signature
+    # and the shift of speaker recognition logic to the caller.
     from audio_recorder import list_input_devices
+    from speaker_manager import load_profiles
+    from main import recognize_speakers
 
     print("This is a test script for the RealtimeTranscriber.")
 
@@ -176,11 +138,26 @@ if __name__ == '__main__':
         print("Recording stopped.")
 
         print("\nProcessing audio...")
-        final_transcript = transcriber.process_audio(recorder)
+        # 1. Get raw transcript and embeddings from the transcriber
+        raw_transcript, embeddings = transcriber.process_audio(recorder)
 
-        print("\n--- Final Transcript ---")
-        if final_transcript:
-            for entry in final_transcript:
-                print(f"[{entry['start']}s - {entry['end']}s] {entry['speaker']}: {entry['text']}")
+        # 2. Perform speaker recognition (simulating the UI's role)
+        print("\nPerforming speaker recognition...")
+        active_profiles = {
+            name: data for name, data in load_profiles().items()
+            if data.get('is_active', True)
+        }
+        label_map, unrecognized = recognize_speakers(embeddings, active_profiles)
+
+        print("\n--- Final Mapped Transcript ---")
+        if raw_transcript:
+            for entry in raw_transcript:
+                speaker_name = label_map.get(entry['speaker'], entry['speaker'])
+                print(f"[{entry['start']}s - {entry['end']}s] {speaker_name}: {entry['text']}")
         else:
             print("No transcript was generated.")
+
+        if unrecognized:
+            print("\n--- Unrecognized Speakers ---")
+            for label in unrecognized.keys():
+                print(f"- {label}")
