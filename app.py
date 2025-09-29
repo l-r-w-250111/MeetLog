@@ -85,11 +85,37 @@ def handle_processing():
                 st.session_state.recorder.stop()
 
     elif st.session_state.app_state == 'stopping':
-        if st.session_state.recorder:
+        st.info("Stopping recording and finalizing transcript. Please wait...")
+        # Ensure recorder and transcriber exist before trying to use them
+        if st.session_state.recorder and st.session_state.transcriber:
             st.session_state.recorder.stop()
-            st.session_state.recorder = None
+
+            with st.spinner("Processing final audio... This may take a moment."):
+                try:
+                    # Perform one final processing run on the entire audio
+                    raw_transcript, embeddings = st.session_state.transcriber.process_audio(st.session_state.recorder)
+                    st.session_state.transcript_data = raw_transcript
+                    if embeddings:
+                        st.session_state.speaker_embeddings = embeddings
+
+                    # Perform final speaker recognition on the full transcript
+                    active_profiles = {name: data for name, data in load_profiles().items() if data.get('is_active', True)}
+                    label_map, unrecognized = recognize_speakers(st.session_state.speaker_embeddings, active_profiles)
+
+                    st.session_state.speaker_name_map = label_map
+                    st.session_state.unrecognized_speakers = unrecognized
+                    st.success("Final transcript ready!")
+
+                except Exception as e:
+                    st.error(f"An error occurred during final processing: {e}")
+                finally:
+                    # Clean up resources regardless of success or failure
+                    st.session_state.recorder = None
+                    st.session_state.transcriber = None
+
+        # Reset state and rerun to display the final transcript cleanly
         st.session_state.app_state = 'idle'
-        st.info("Recording stopped.")
+        st.rerun()
 
 # --- UI Drawing Functions ---
 
@@ -213,7 +239,7 @@ def draw_results_and_naming():
                     new_name = st.session_state.get(f"name_for_{label}")
                     if new_name:
                         st.session_state.speaker_name_map[label] = new_name
-                # No rerun needed, Streamlit reruns automatically.
+                st.rerun()
         with col2:
             if st.button("Save Names and Features"):
                 saved_count = 0

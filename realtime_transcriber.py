@@ -23,6 +23,12 @@ class RealtimeTranscriber:
         self.transcript = []  # Stores segments with raw speaker labels (e.g., 'SPEAKER_00')
         print("RealtimeTranscriber initialized.")
 
+    def _audio_segment_to_numpy(self, audio_segment: AudioSegment) -> np.ndarray:
+        """Converts a Pydub AudioSegment to a float32 NumPy array for Whisper."""
+        samples = np.array(audio_segment.get_array_of_samples())
+        # Normalize to float32
+        return samples.astype(np.float32) / np.iinfo(samples.dtype).max
+
     def process_audio(self, recorder: AudioRecorder) -> tuple[list, dict]:
         """
         Processes the latest audio from the recorder, transcribes only the new
@@ -40,20 +46,18 @@ class RealtimeTranscriber:
         if not wav_data:
             return self.transcript, {}
 
-        # Diarization requires a file path, so we use a temporary file
+        # Diarization still requires a file path
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
             tmp_path = tmp_file.name
             tmp_file.write(wav_data)
 
         speaker_embeddings = {}
         try:
-            # 1. Perform diarization on the entire audio recorded so far
             print("\nProcessing audio buffer for diarization...")
             diarization_segments, speaker_embeddings = perform_diarization(tmp_path)
             if not diarization_segments:
                 return self.transcript, speaker_embeddings
 
-            # 2. Transcribe only new segments
             audio = AudioSegment.from_wav(tmp_path)
 
             new_segments_to_transcribe = [
@@ -65,42 +69,34 @@ class RealtimeTranscriber:
 
             print(f"Found {len(new_segments_to_transcribe)} new segments to transcribe.")
 
-            temp_chunk_dir = "temp_realtime_chunks"
-            if os.path.exists(temp_chunk_dir):
-                shutil.rmtree(temp_chunk_dir)
-            os.makedirs(temp_chunk_dir)
-
             for i, segment in enumerate(new_segments_to_transcribe):
                 start_s = segment['start']
                 end_s = segment['end']
 
-                # We only want to process the *new* part of a potentially overlapping segment
                 if start_s < self.last_processed_end_time:
                     start_s = self.last_processed_end_time
 
                 if start_s >= end_s:
                     continue
 
-                audio_chunk = audio[start_s * 1000 : end_s * 1000]
-                chunk_filename = os.path.join(temp_chunk_dir, f"chunk_{i}.wav")
-                audio_chunk.export(chunk_filename, format="wav")
+                audio_chunk_segment = audio[start_s * 1000 : end_s * 1000]
+
+                # Convert audio chunk to numpy array for in-memory processing
+                audio_np = self._audio_segment_to_numpy(audio_chunk_segment)
 
                 try:
-                    transcribed_text = transcribe_audio_chunk(chunk_filename, model_size=self.model_size)
+                    # Transcribe directly from the numpy array
+                    transcribed_text = transcribe_audio_chunk(audio_np, model_size=self.model_size)
 
-                    # Append with the raw speaker label; recognition is handled by the caller
                     self.transcript.append({
                         "start": f"{start_s:.2f}",
                         "end": f"{end_s:.2f}",
-                        "speaker": segment['speaker'], # Raw label (e.g., 'SPEAKER_00')
+                        "speaker": segment['speaker'],
                         "text": transcribed_text
                     })
                 except Exception as e:
                     print(f"Could not transcribe chunk {i}: {e}")
 
-            shutil.rmtree(temp_chunk_dir)
-
-            # Update the processed time and sort the transcript
             self.last_processed_end_time = diarization_segments[-1]['end']
             self.transcript.sort(key=lambda x: float(x['start']))
 
@@ -113,8 +109,6 @@ class RealtimeTranscriber:
         return self.transcript, speaker_embeddings
 
 if __name__ == '__main__':
-    # This test script needs to be updated to reflect the new return signature
-    # and the shift of speaker recognition logic to the caller.
     from audio_recorder import list_input_devices
     from speaker_manager import load_profiles
     from main import recognize_speakers
@@ -138,10 +132,8 @@ if __name__ == '__main__':
         print("Recording stopped.")
 
         print("\nProcessing audio...")
-        # 1. Get raw transcript and embeddings from the transcriber
         raw_transcript, embeddings = transcriber.process_audio(recorder)
 
-        # 2. Perform speaker recognition (simulating the UI's role)
         print("\nPerforming speaker recognition...")
         active_profiles = {
             name: data for name, data in load_profiles().items()
