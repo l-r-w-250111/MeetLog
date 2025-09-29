@@ -8,6 +8,38 @@ from diarize import perform_diarization
 from transcribe import transcribe_audio_chunk
 from speaker_manager import load_profiles, find_matching_speaker
 
+
+def recognize_speakers(
+    speaker_embeddings: dict, active_profiles: dict
+) -> tuple[dict, dict]:
+    """
+    Recognizes speakers from embeddings against active profiles.
+
+    Args:
+        speaker_embeddings (dict): Embeddings of speakers found in the audio.
+        active_profiles (dict): Active speaker profiles to match against.
+
+    Returns:
+        A tuple containing:
+        - A dictionary mapping temporary speaker labels to recognized names.
+        - A dictionary of unrecognized speakers and their embeddings.
+    """
+    speaker_label_map = {}
+    unrecognized_speakers = {}
+
+    for label, embedding in speaker_embeddings.items():
+        matched_name = find_matching_speaker(embedding, active_profiles)
+        if matched_name:
+            speaker_label_map[label] = matched_name
+            print(f"Matched {label} to known speaker: {matched_name}")
+        else:
+            speaker_label_map[label] = label  # Keep original label for now
+            unrecognized_speakers[label] = embedding
+            print(f"Could not recognize {label}. Marked as new speaker.")
+
+    return speaker_label_map, unrecognized_speakers
+
+
 def create_transcript(audio_path: str, model_size: str = "base") -> tuple[list, dict, dict]:
     """
     Creates a transcript, recognizing known speakers and identifying new ones.
@@ -36,25 +68,14 @@ def create_transcript(audio_path: str, model_size: str = "base") -> tuple[list, 
     # 2. Recognize known speakers
     print("\nAttempting to recognize speakers from saved profiles...")
     all_profiles = load_profiles()
-    # Filter for active profiles only
     active_profiles = {
         name: data for name, data in all_profiles.items() if data.get('is_active', True)
     }
-    print(f"Found {len(active_profiles)} active speaker profiles to use for recognition.")
+    print(f"Found {len(active_profiles)} active speaker profiles for recognition.")
     
-    speaker_label_map = {}
-    unrecognized_speakers = {}
-
-    for label, embedding in speaker_embeddings.items():
-        # Match against active profiles only
-        matched_name = find_matching_speaker(embedding, active_profiles)
-        if matched_name:
-            speaker_label_map[label] = matched_name
-            print(f"Matched {label} to known speaker: {matched_name}")
-        else:
-            speaker_label_map[label] = label  # Keep original label for now
-            unrecognized_speakers[label] = embedding
-            print(f"Could not recognize {label}. Marked as new speaker.")
+    speaker_label_map, unrecognized_speakers = recognize_speakers(
+        speaker_embeddings, active_profiles
+    )
 
     # 3. Prepare for audio processing
     print(f"\nLoading audio file: {audio_path}")
