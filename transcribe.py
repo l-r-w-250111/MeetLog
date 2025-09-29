@@ -1,74 +1,63 @@
-import argparse
 import whisper
-import os
 import torch
+import os
+import argparse
+import numpy as np
 
-# Cache for the loaded model and its size.
-_model = None
-_current_model_size = None
+# --- Globals for expensive models ---
+_whisper_models = {}
 
-def transcribe_audio_chunk(audio_path: str, model_size: str = "base") -> str:
+def load_model(model_size: str):
+    """Loads a model or returns the cached model."""
+    global _whisper_models
+    if model_size not in _whisper_models:
+        print(f"Loading Whisper model '{model_size}' for the first time...")
+        _whisper_models[model_size] = whisper.load_model(model_size)
+        print("Model loaded.")
+    return _whisper_models[model_size]
+
+def transcribe_audio_chunk(audio_source: str | np.ndarray, model_size: str) -> str:
     """
-    Transcribes an audio file using the local Whisper model.
-    It will load or reload the model if the requested model_size is different
-    from the one currently in memory.
+    Transcribes a single audio chunk using the specified Whisper model.
+    Models are cached globally to avoid reloading.
 
     Args:
-        audio_path: Path to the audio file.
-        model_size: The size of the Whisper model to use (e.g., "tiny", "base", "small").
+        audio_source (str or np.ndarray): Path to audio file or float32 NumPy array.
+        model_size (str): The Whisper model size (e.g., 'base', 'small').
 
     Returns:
-        The transcribed text.
+        The transcribed text of the audio chunk.
     """
-    global _model
-    global _current_model_size
+    if isinstance(audio_source, str) and not os.path.exists(audio_source):
+        raise FileNotFoundError(f"Audio file not found: {audio_source}")
 
-    # 1. Check if the audio file exists
-    if not os.path.exists(audio_path):
-        raise FileNotFoundError(f"Audio file not found at: {audio_path}")
+    model = load_model(model_size)
 
-    # 2. Load or reload the Whisper model if necessary
-    if _model is None or _current_model_size != model_size:
-        print(f"Model size changed or not loaded. Loading Whisper model '{model_size}'...")
-        # Check for GPU
-        if torch.cuda.is_available():
-            device = "cuda"
-            print("GPU (CUDA) is available. Using GPU for transcription.")
-        else:
-            device = "cpu"
-            print("GPU (CUDA) not found. Using CPU for transcription. This will be significantly slower.")
-            print("For GPU acceleration, please ensure you have an NVIDIA GPU and that PyTorch with CUDA support is installed correctly.")
-        
-        # Load the new model and update the cache
-        _model = whisper.load_model(model_size, device=device)
-        _current_model_size = model_size
-        print(f"Model '{model_size}' loaded on device: {device}")
+    # Check for CUDA availability for faster processing
+    use_fp16 = torch.cuda.is_available()
 
-    # 3. Perform transcription
-    print(f"Transcribing '{os.path.basename(audio_path)}' with model '{_current_model_size}'...")
-    # fp16 is only available on CUDA
-    result = _model.transcribe(audio_path, fp16=torch.cuda.is_available())
-    
-    transcribed_text = result["text"]
-    print("Transcription complete.")
-    
-    return transcribed_text.strip()
+    try:
+        # The 'audio' parameter of transcribe can be a path or a numpy array
+        result = model.transcribe(audio_source, fp16=use_fp16)
+        text = result['text'].strip()
+        if text: # Avoid printing empty transcriptions
+            print(f"Transcribed chunk: {text}")
+        return text
+    except Exception as e:
+        print(f"Error during transcription: {e}")
+        return ""
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Transcribe an audio file using a local Whisper model.")
+    parser = argparse.ArgumentParser(description="Transcribe an audio file using Whisper.")
     parser.add_argument("audio_file", type=str, help="The path to the audio file to transcribe.")
-    parser.add_argument("--model", type=str, default="base", help="The Whisper model size to use (e.g., tiny, base, small, medium, large).")
+    parser.add_argument("--model", type=str, default="base", help="Whisper model size.")
 
     args = parser.parse_args()
 
-    try:
-        # Example usage: python transcribe.py path/to/your/audio.wav --model base
-        transcription = transcribe_audio_chunk(args.audio_file, model_size=args.model)
-        
+    if not os.path.exists(args.audio_file):
+        print(f"Error: The file '{args.audio_file}' does not exist.")
+    else:
+        print(f"Transcribing '{args.audio_file}' with the '{args.model}' model...")
+        transcribed_text = transcribe_audio_chunk(args.audio_file, model_size=args.model)
         print("\n--- Transcription Result ---")
-        print(transcription)
-
-    except FileNotFoundError as e:
-        print(f"Error: {e}")
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+        print(transcribed_text)

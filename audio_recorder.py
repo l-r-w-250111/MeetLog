@@ -41,6 +41,7 @@ class AudioRecorder:
         self.audio_buffer = []
         self.latest_volume = 0.0  # To store the volume of the most recent chunk
         self.lock = threading.Lock()
+        self._processed_chunks_count = 0 # To track chunks for the new method
 
     def _callback(self, indata: np.ndarray, frames: int, time, status):
         """
@@ -65,6 +66,7 @@ class AudioRecorder:
 
         print(f"Starting recording on device {self.device_index}...")
         self.audio_buffer = []
+        self._processed_chunks_count = 0
         self.stream = sd.InputStream(
             samplerate=self.sample_rate,
             device=self.device_index,
@@ -100,7 +102,7 @@ class AudioRecorder:
         with self.lock:
             return self.latest_volume
 
-    def get_wav_data(self) -> bytes:
+    def get_wav_data(self) -> bytes | None:
         """
         Returns the entire recorded audio buffer as WAV formatted bytes.
         The lock is held only for the brief moment of copying the buffer list
@@ -112,25 +114,49 @@ class AudioRecorder:
         """
         with self.lock:
             # Quickly copy the list of chunks under lock
+            if not self.audio_buffer:
+                return None
             audio_chunks = list(self.audio_buffer)
-
-        if not audio_chunks:
-            return None
 
         # Perform the potentially slow concatenation outside the lock
         full_audio = np.concatenate(audio_chunks, axis=0)
-
-        # Normalize to 16-bit PCM
         audio_int16 = np.int16(full_audio * 32767)
 
-        # Use an in-memory buffer to write the WAV file
         wav_buffer = io.BytesIO()
         scipy.io.wavfile.write(wav_buffer, self.sample_rate, audio_int16)
-
-        # Go to the beginning of the buffer to read its content
         wav_buffer.seek(0)
 
         return wav_buffer.read()
+
+    def get_new_wav_data(self) -> bytes | None:
+        """
+        Returns only the new, unprocessed audio chunks as WAV formatted bytes.
+        This is designed for lightweight, real-time preview processing.
+
+        Returns:
+            A bytes object with the new audio in WAV format, or None if no new
+            audio is available.
+        """
+        new_chunks = []
+        with self.lock:
+            num_chunks = len(self.audio_buffer)
+            if num_chunks > self._processed_chunks_count:
+                new_chunks = self.audio_buffer[self._processed_chunks_count:num_chunks]
+                self._processed_chunks_count = num_chunks
+        
+        if not new_chunks:
+            return None
+
+        # Process outside the lock
+        new_audio = np.concatenate(new_chunks, axis=0)
+        audio_int16 = np.int16(new_audio * 32767)
+        
+        wav_buffer = io.BytesIO()
+        scipy.io.wavfile.write(wav_buffer, self.sample_rate, audio_int16)
+        wav_buffer.seek(0)
+        
+        return wav_buffer.read()
+
 
 if __name__ == "__main__":
     import time
@@ -150,7 +176,18 @@ if __name__ == "__main__":
 
         print(f"\nStarting a 5-second test recording on device {first_device_index}...")
         recorder.start()
-        time.sleep(5)
+        time.sleep(2)
+        
+        print("Getting first chunk of new data...")
+        new_data = recorder.get_new_wav_data()
+        print(f"Got {len(new_data) if new_data else 0} bytes.")
+
+        time.sleep(3)
+
+        print("Getting second chunk of new data...")
+        new_data_2 = recorder.get_new_wav_data()
+        print(f"Got {len(new_data_2) if new_data_2 else 0} bytes.")
+
         recorder.stop()
 
         print("\nRecording complete.")
