@@ -25,8 +25,8 @@ def initialize_session():
         st.session_state.speaker_name_map = {}
         st.session_state.unrecognized_speakers = {}
         
-        # For live preview
-        st.session_state.live_preview_transcript = []
+        # For live preview - This now stores the updating list of strings
+        st.session_state.live_transcript_fragments = []
 
         st.session_state.recorder = None
         st.session_state.transcriber = None
@@ -38,14 +38,14 @@ def reset_transcript_state():
     st.session_state.speaker_embeddings = {}
     st.session_state.speaker_name_map = {}
     st.session_state.unrecognized_speakers = {}
-    st.session_state.live_preview_transcript = []
+    st.session_state.live_transcript_fragments = []
 
     if 'recorder' in st.session_state and st.session_state.recorder:
         st.session_state.recorder.stop()
     st.session_state.recorder = None
 
     if 'transcriber' in st.session_state and st.session_state.transcriber:
-        st.session_state.transcriber.clear_preview_transcript()
+        st.session_state.transcriber.clear_transcript_fragments()
     st.session_state.transcriber = None
     
     print("Transcript state reset for new task.")
@@ -77,17 +77,8 @@ def handle_processing():
         st.session_state.app_state = 'idle'
         st.rerun()
 
-    elif st.session_state.app_state == 'recording':
-        # LIVE PREVIEW LOGIC
-        if st.session_state.transcriber and st.session_state.recorder:
-            try:
-                preview_texts = st.session_state.transcriber.process_preview_audio(st.session_state.recorder)
-                st.session_state.live_preview_transcript = preview_texts
-            except Exception as e:
-                st.error(f"An error occurred during live preview: {e}")
-                st.session_state.app_state = 'idle'
-                if st.session_state.recorder:
-                    st.session_state.recorder.stop()
+    # The 'recording' state logic is now handled inside the fragment,
+    # so we remove it from the main processing handler to avoid redundancy.
 
     elif st.session_state.app_state == 'stopping':
         # FINAL TRANSCRIPTION LOGIC
@@ -183,39 +174,61 @@ def draw_realtime_tab(is_disabled):
         st.error(f"Could not list audio devices. Ensure 'portaudio' is installed. Error: {e}")
         return
 
-    realtime_ui_placeholder = st.empty()
-
     if st.session_state.app_state == 'idle':
-        with realtime_ui_placeholder.container():
-            if st.button("Start Recording", key="start_recording"):
-                reset_transcript_state()
-                device_index = input_devices[selected_device_name]
-                st.session_state.transcriber = RealtimeTranscriber(model_size=st.session_state.model_size)
-                st.session_state.recorder = AudioRecorder(device_index=device_index)
-                st.session_state.recorder.start()
-                st.session_state.app_state = 'recording'
-                st.rerun()
+        if st.button("Start Recording", key="start_recording"):
+            reset_transcript_state()
+            device_index = input_devices[selected_device_name]
+            st.session_state.transcriber = RealtimeTranscriber(model_size=st.session_state.model_size)
+            st.session_state.recorder = AudioRecorder(device_index=device_index)
+            st.session_state.recorder.start()
+            st.session_state.app_state = 'recording'
+            st.rerun()
     
     elif st.session_state.app_state == 'recording':
-        with realtime_ui_placeholder.container():
-            st.info("🔴 Recording... (Live Preview)")
-            if st.session_state.recorder:
-                st.write("Input Volume:")
-                volume = st.session_state.recorder.get_latest_volume()
-                display_volume = min(int(volume * 500), 100)
-                st.progress(display_volume)
-            
-            st.header("Live Transcript Preview")
-            preview_text = "\n".join(st.session_state.live_preview_transcript)
-            st.text_area("Preview", preview_text, height=200) # No key
-            
-            if st.button("Stop Recording", key="stop_recording"):
-                st.session_state.app_state = 'stopping'
-                st.rerun()
-            
-            # This is the key fix: The refresh component MUST be rendered
-            # with the real-time UI to trigger the update loop.
-            st.components.v1.html(f"<meta http-equiv='refresh' content='{PROCESSING_INTERVAL}'>", height=0)
+        st.info("🔴 Recording...")
+        if st.button("Stop Recording", key="stop_recording"):
+            st.session_state.app_state = 'stopping'
+            st.rerun()
+        
+        # This is where the magic happens. We call the fragment function.
+        # Streamlit will automatically handle re-running it.
+        draw_recording_fragment()
+
+@st.fragment(run_every=2)
+def draw_recording_fragment():
+    """
+    This fragment handles the real-time UI updates during recording.
+    It is decorated to run every 2 seconds.
+    """
+    if st.session_state.app_state != 'recording':
+        return
+
+    # --- 1. Backend Processing: Get new audio and transcribe it ---
+    try:
+        if st.session_state.recorder and st.session_state.transcriber:
+            new_text_fragments = st.session_state.transcriber.process_audio_chunk(st.session_state.recorder)
+            # Append new results to the session state list
+            if new_text_fragments:
+                st.session_state.live_transcript_fragments.extend(new_text_fragments)
+
+    except Exception as e:
+        st.error(f"An error occurred during live transcription: {e}")
+        st.session_state.app_state = 'idle'
+        if st.session_state.recorder:
+            st.session_state.recorder.stop()
+        st.rerun()
+
+    # --- 2. UI Drawing: Display volume and transcript ---
+    if st.session_state.recorder:
+        st.write("Input Volume:")
+        volume = st.session_state.recorder.get_latest_volume()
+        display_volume = min(int(volume * 500), 100)
+        st.progress(display_volume)
+    
+    st.header("Live Transcript")
+    # Join all fragments received so far
+    full_transcript = " ".join(st.session_state.live_transcript_fragments)
+    st.text_area("Preview", full_transcript, height=200, key="live_transcript_preview")
 
 
 def draw_results_and_naming():
