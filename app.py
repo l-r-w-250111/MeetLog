@@ -16,7 +16,7 @@ def initialize_session():
     """Initializes the session state ONCE at the start of an app run."""
     if 'app_state' not in st.session_state:
         st.session_state.app_state = 'idle'  # idle, processing_file, recording, stopping
-        st.session_state.model_size = 'large'
+        st.session_state.model_size = 'turbo'
         st.session_state.transcription_mode = 'File Upload'  # Default mode
         
         # For final, detailed transcript
