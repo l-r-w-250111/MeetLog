@@ -15,12 +15,12 @@ from main import create_transcript
 class RealtimeTranscriber:
     """
     Manages the transcription process. It now supports two modes:
-    1. `process_preview_audio`: A lightweight, fast method for live previews.
+    1. `process_audio_chunk`: A lightweight, fast method for live previews.
     2. `process_final_audio`: A comprehensive method for final, diarized transcripts.
     """
     def __init__(self, model_size: str = "base"):
         self.model_size = model_size
-        self.preview_transcript = [] # Stores simple text strings for the live preview
+        self.transcript_fragments = [] # Stores simple text strings for the live preview
         print("RealtimeTranscriber initialized.")
 
     def _audio_segment_to_numpy(self, audio_segment: AudioSegment) -> np.ndarray:
@@ -29,7 +29,7 @@ class RealtimeTranscriber:
         # Normalize to float32
         return samples.astype(np.float32) / np.iinfo(samples.dtype).max
 
-    def process_preview_audio(self, recorder: AudioRecorder) -> list[str]:
+    def process_audio_chunk(self, recorder: AudioRecorder) -> list[str]:
         """
         Processes only the newest audio segment for a lightweight live preview.
         This does NOT perform speaker diarization.
@@ -38,12 +38,14 @@ class RealtimeTranscriber:
             recorder (AudioRecorder): The audio recorder instance.
 
         Returns:
-            A list of transcribed text segments from the new audio.
+            A list containing any new transcribed text fragments. Returns an
+            empty list if no new audio was processed or no text was found.
         """
         new_wav_data = recorder.get_new_wav_data()
         if not new_wav_data:
-            return self.preview_transcript
+            return [] # Return an empty list if there's no new data
 
+        new_fragments = []
         try:
             # Convert the new wav data bytes to a numpy array for transcription
             audio_segment = AudioSegment.from_wav(io.BytesIO(new_wav_data))
@@ -52,13 +54,13 @@ class RealtimeTranscriber:
             # Transcribe the new chunk
             transcribed_text = transcribe_audio_chunk(audio_np, model_size=self.model_size)
             
-            if transcribed_text:
-                self.preview_transcript.append(transcribed_text)
+            if transcribed_text and transcribed_text.strip():
+                new_fragments.append(transcribed_text.strip())
 
         except Exception as e:
-            print(f"Could not transcribe preview chunk: {e}")
+            print(f"Could not transcribe audio chunk: {e}")
         
-        return self.preview_transcript
+        return new_fragments
 
     def process_final_audio(self, recorder: AudioRecorder) -> tuple[list, dict, dict]:
         """
@@ -99,6 +101,6 @@ class RealtimeTranscriber:
         
         return transcript, unrecognized, label_map
 
-    def clear_preview_transcript(self):
-        """Clears the preview transcript for a new session."""
-        self.preview_transcript = []
+    def clear_transcript_fragments(self):
+        """Clears the transcript fragments for a new session."""
+        self.transcript_fragments = []
