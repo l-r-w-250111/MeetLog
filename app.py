@@ -141,11 +141,12 @@ def draw_sidebar():
 def draw_main_interface():
     st.header("Transcription Source")
     is_disabled = st.session_state.app_state != 'idle'
-    current_model_size_index = ['tiny', 'base', 'small', 'medium', 'large'].index(st.session_state.model_size)
+    model_options = ['tiny', 'base', 'small', 'medium', 'large', 'turbo']
+    current_model_size_index = model_options.index(st.session_state.model_size)
 
     selected_model = st.selectbox(
         "Select Whisper model size",
-        ('tiny', 'base', 'small', 'medium', 'large'),
+        model_options,
         index=current_model_size_index, key='model_size_selector', disabled=is_disabled
     )
     if not is_disabled and selected_model != st.session_state.model_size:
