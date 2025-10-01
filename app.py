@@ -228,7 +228,7 @@ def draw_recording_fragment():
     st.header("Live Transcript")
     # Join all fragments received so far
     full_transcript = " ".join(st.session_state.live_transcript_fragments)
-    st.text_area("Preview", full_transcript, height=200, key="live_transcript_preview")
+    st.text_area("Preview", full_transcript, height=200)
 
 
 def draw_results_and_naming():

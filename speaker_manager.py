@@ -87,7 +87,7 @@ def cosine_similarity(emb1: np.ndarray, emb2: np.ndarray) -> float:
         
     return dot_product / (norm_emb1 * norm_emb2)
 
-def find_matching_speaker(new_embedding: np.ndarray, profiles: dict, threshold: float = 0.85) -> str:
+def find_matching_speaker(new_embedding: np.ndarray, profiles: dict, threshold: float = 0.75) -> str:
     """
     Finds a matching speaker from saved profiles based on cosine similarity.
     """
