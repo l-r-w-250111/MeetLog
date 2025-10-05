@@ -136,7 +136,7 @@ You can also run the tool directly from the command line.
 python main.py path/to/your/audio.wav
 
 # Use a larger model for better accuracy
-python main.py path/to/your/audio.wav --model medium
+python main.py path/to/your/audio.wav --model large
 ```
 
 ---
