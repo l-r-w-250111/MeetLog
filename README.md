@@ -43,8 +43,8 @@ Follow these steps to get the project up and running.
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/your-username/Meeting-Minutes-with-AI.git
-cd Meeting-Minutes-with-AI
+git clone https://github.com/l-r-w-250111/MeetLog.git
+cd MeetLog
 ```
 
 ### 2. Create and Activate a Virtual Environment
