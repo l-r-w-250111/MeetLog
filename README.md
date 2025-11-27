@@ -53,7 +53,7 @@ It's highly recommended to use a virtual environment to manage dependencies.
 
 ```bash
 # Create the environment
-python -m venv venv
+py -3.11 -m venv venv
 
 # Activate it
 # On macOS/Linux:
@@ -74,7 +74,7 @@ pip install -r requirements.txt
 # First, uninstall the default CPU versions
 pip uninstall torch torchaudio
 # Then, install the CUDA version (example for CUDA 12.1)
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install torch==2.2.0 torchaudio==2.2.0 --index-url https://download.pytorch.org/whl/cu121
 ```
 *Find the correct command for your specific CUDA version on the [PyTorch website](https://pytorch.org/get-started/locally/).*
 
