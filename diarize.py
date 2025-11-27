@@ -3,7 +3,8 @@ import argparse
 from dotenv import load_dotenv
 import torch
 import numpy as np
-from pyannote.audio import Pipeline, Inference
+# Updated imports to include Model
+from pyannote.audio import Pipeline, Model, Inference
 from pyannote.audio.core.io import Audio
 from pyannote.core import Segment
 
@@ -24,22 +25,28 @@ def _initialize_pipelines():
     if not hf_token:
         raise ValueError("HUGGING_FACE_TOKEN not found in .env file. Please add it.")
 
+    _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {_device}")
+
     print("Loading speaker diarization pipeline for the first time...")
+    # Use 'token' instead of 'use_auth_token'
     _diarization_pipeline = Pipeline.from_pretrained(
         "pyannote/speaker-diarization-3.1",
-        use_auth_token=hf_token
+        token=hf_token
     )
+    _diarization_pipeline.to(_device)
     
     print("Loading speaker embedding model for the first time...")
-    _embedding_model = Inference(
+    # New way to load embedding model for pyannote.audio 3.x/4.x
+    embedding_model_obj = Model.from_pretrained(
         "pyannote/embedding", 
-        use_auth_token=hf_token
+        token=hf_token
     )
-
-    _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    _diarization_pipeline.to(_device)
+    # The Inference class now takes a Model object
+    _embedding_model = Inference(embedding_model_obj, window="whole")
     _embedding_model.to(_device)
-    print(f"Pipelines loaded on device: {_device}")
+
+    print("Pipelines loaded.")
 
 def perform_diarization(audio_path: str) -> tuple[list, dict]:
     """
@@ -78,6 +85,7 @@ def perform_diarization(audio_path: str) -> tuple[list, dict]:
             
             embeddings_list = []
             for turn in speaker_turns:
+                # Boundary check from original code
                 if turn.end > file_duration:
                     turn = Segment(turn.start, file_duration)
                 
@@ -86,19 +94,20 @@ def perform_diarization(audio_path: str) -> tuple[list, dict]:
 
                 chunk, sr = audio_loader.crop(audio_path, turn)
                 
-                embedding_input = {"waveform": chunk.to(_device), "sample_rate": sr}
+                embedding_input = {"waveform": chunk, "sample_rate": sr}
                 
-                embedding_windows = _embedding_model(embedding_input)
-                embedding = np.mean(embedding_windows.data, axis=0)
+                # The Inference object returns a numpy array directly
+                embedding = _embedding_model(embedding_input)
                 embeddings_list.append(embedding)
             
             if embeddings_list:
-                speaker_embeddings[speaker_label] = np.mean(embeddings_list, axis=0)
+                # Stack and average the embeddings for the current speaker
+                speaker_embeddings[speaker_label] = np.mean(np.vstack(embeddings_list), axis=0)
         
         print(f"Extracted embeddings for {len(speaker_embeddings)} speakers.")
 
     except Exception as e:
-        raise RuntimeError(f"Failed during speaker embedding extraction: {e}")
+        raise RuntimeError(f"Failed during speaker embedding extraction for '{audio_path}': {e}")
 
     # 5. Process segments
     segments = []

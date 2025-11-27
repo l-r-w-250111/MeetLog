@@ -14,7 +14,7 @@ pyannote.pipeline>=3.0.1
 # --- audio recording ---
 pydub==0.25.1
 soundfile          
-numpy>=2.3          
+numpy==1.26.4
 scipy>=1.9.0       
 librosa>=0.9.2      
 
