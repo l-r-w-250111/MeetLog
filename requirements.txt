@@ -1,8 +1,8 @@
 # Python 3.10 or 3.11 
 
 # --- PyTorch / audio backend ---
-torch==2.2.0        
-torchaudio==2.2.0  
+torch==2.3.0
+torchaudio==2.3.0
 
 # --- pyannote  ---
 pyannote.audio==4.0.2
