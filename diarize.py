@@ -1,11 +1,6 @@
 import os
 import argparse
 from dotenv import load_dotenv
-import torch
-import numpy as np
-from pyannote.audio import Pipeline, Inference
-from pyannote.audio.core.io import Audio
-from pyannote.core import Segment
 
 # --- Globals for expensive models ---
 _diarization_pipeline = None
@@ -19,22 +14,24 @@ def _initialize_pipelines():
     if _diarization_pipeline is not None:
         return
 
+    # Lazy import of heavy libraries
+    import torch
+    from pyannote.audio import Pipeline, Inference, Model
+
     load_dotenv()
     hf_token = os.getenv("HUGGING_FACE_TOKEN")
     if not hf_token:
         raise ValueError("HUGGING_FACE_TOKEN not found in .env file. Please add it.")
 
     print("Loading speaker diarization pipeline for the first time...")
+    # For pyannote.audio 3.x
     _diarization_pipeline = Pipeline.from_pretrained(
         "pyannote/speaker-diarization-3.1",
-        use_auth_token=hf_token
+        token=hf_token
     )
-    
     print("Loading speaker embedding model for the first time...")
-    _embedding_model = Inference(
-        "pyannote/embedding", 
-        use_auth_token=hf_token
-    )
+    model = Model.from_pretrained("pyannote/embedding", token=hf_token)
+    _embedding_model = Inference(model, window="whole")
 
     _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     _diarization_pipeline.to(_device)
@@ -67,6 +64,11 @@ def perform_diarization(audio_path: str) -> tuple[list, dict]:
     print("Diarization complete.")
 
     # 4. Extract speaker embeddings
+    import torch
+    import numpy as np
+    from pyannote.audio.core.io import Audio
+    from pyannote.core import Segment
+    
     print("Extracting speaker embeddings...")
     try:
         audio_loader = Audio(sample_rate=16000, mono=True)
