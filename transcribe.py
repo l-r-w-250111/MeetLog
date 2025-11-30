@@ -12,6 +12,14 @@ def load_model(model_size: str):
     global _whisper_models
     if model_size not in _whisper_models:
         print(f"Loading Whisper model '{model_size}' for the first time...")
+
+        # [FIX] Add torch.torch_version.TorchVersion to safe globals for PyTorch >= 2.6
+        # This is required to load certain model checkpoints that include this type,
+        # addressing a security change in torch.load's `weights_only` parameter.
+        if hasattr(torch, "serialization") and hasattr(torch.serialization, "add_safe_globals"):
+            import torch.torch_version
+            torch.serialization.add_safe_globals([torch.torch_version.TorchVersion])
+
         _whisper_models[model_size] = whisper.load_model(model_size)
         print("Model loaded.")
     return _whisper_models[model_size]

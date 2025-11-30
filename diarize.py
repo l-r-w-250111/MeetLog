@@ -18,6 +18,13 @@ def _initialize_pipelines():
     import torch
     from pyannote.audio import Pipeline, Inference, Model
 
+    # [FIX] Add torch.torch_version.TorchVersion to safe globals for PyTorch >= 2.6
+    # This is required to load certain model checkpoints that include this type,
+    # addressing a security change in torch.load's `weights_only` parameter.
+    if hasattr(torch, "serialization") and hasattr(torch.serialization, "add_safe_globals"):
+        import torch.torch_version
+        torch.serialization.add_safe_globals([torch.torch_version.TorchVersion])
+
     load_dotenv()
     hf_token = os.getenv("HUGGING_FACE_TOKEN")
     if not hf_token:
