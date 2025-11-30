@@ -19,6 +19,14 @@ def _initialize_pipelines():
     import torch
     from pyannote.audio import Pipeline, Inference, Model
 
+    # Fix for PyTorch 2.6+ `torch.load` weight-only loading issue,
+    # required by some models used in pyannote.audio.
+    try:
+        if hasattr(torch, "torch_version") and hasattr(torch.serialization, "add_safe_globals"):
+            torch.serialization.add_safe_globals([torch.torch_version.TorchVersion])
+    except Exception as e:
+        warnings.warn(f"Could not apply torch serialization fix for pyannote: {e}")
+
     load_dotenv()
     if not os.getenv("HUGGING_FACE_TOKEN"):
         raise ValueError("HUGGING_FACE_TOKEN not found in .env file. Please add it.")
