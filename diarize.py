@@ -7,7 +7,6 @@ import numpy as np
 from pyannote.audio import Pipeline, Inference, Model
 from pyannote.audio.core.io import Audio
 from pyannote.core import Segment
-# 💡 修正ポイント: Introspection をインポートするために pyannote.audio.core.model からインポート
 from pyannote.audio.core.task import Specifications, Problem, Resolution
 from pyannote.audio.core.model import Introspection 
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint 
@@ -47,13 +46,12 @@ def _initialize_pipelines():
     # [FIX] PyTorch >= 2.6 の安全なロードのためのカスタムグローバルを追加
     if hasattr(torch, "serialization") and hasattr(torch.serialization, "add_safe_globals"):
         print("Adding pyannote custom classes to torch's safe globals...")
-        # 💡 新しい修正ポイント: Introspection を追加
         torch.serialization.add_safe_globals([
             torch.torch_version.TorchVersion,
             Specifications,
             Problem,
             Resolution, 
-            Introspection, # <<< これを追加
+            Introspection, 
             EarlyStopping, 
             ModelCheckpoint,
             ListConfig,
