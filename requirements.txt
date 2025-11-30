@@ -19,4 +19,5 @@ openai-whisper==20231117
 streamlit==1.37.0  
 python-dotenv  
 sounddevice            
+huggingface_hub==0.19.4
 PyAudio                 # Windows 
