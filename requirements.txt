@@ -1,13 +1,9 @@
 # --- PyTorch / audio backend ---
-# torch==2.3.0
-# torchaudio==2.3.0
+torch==2.8.0
+torchaudio==2.8.0
 
 # --- pyannote  ---
 pyannote.audio==3.4.0
-# pyannote.core>=5.0.0
-# pyannote.database>=5.0.1
-# pyannote.metrics>=3.2
-# pyannote.pipeline>=3.0.1
 
 # --- audio recording ---
 pydub==0.25.1
@@ -21,7 +17,6 @@ openai-whisper==20231117
 
 # ---  ---
 streamlit==1.37.0  
-python-dotenv
-pydub==0.25.1      
+python-dotenv  
 sounddevice            
 PyAudio                 # Windows 
