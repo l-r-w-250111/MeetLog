@@ -1,22 +1,72 @@
 import os
 import argparse
 from dotenv import load_dotenv
+import torch
+import torch.torch_version
+import numpy as np
+from pyannote.audio import Pipeline, Inference, Model
+from pyannote.audio.core.io import Audio
+from pyannote.core import Segment
+# 💡 修正ポイント: Introspection をインポートするために pyannote.audio.core.model からインポート
+from pyannote.audio.core.task import Specifications, Problem, Resolution
+from pyannote.audio.core.model import Introspection 
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint 
+from omegaconf.listconfig import ListConfig
+from omegaconf.base import ContainerMetadata, Metadata 
+from omegaconf.dictconfig import DictConfig
+from omegaconf.nodes import AnyNode
+from typing import Any 
+from collections import defaultdict
+import huggingface_hub
+from functools import wraps
 
 # --- Globals for expensive models ---
 _diarization_pipeline = None
 _embedding_model = None
 _device = None
 
+# --- Hugging Face Hub Monkey Patch ---
+original_hf_hub_download = huggingface_hub.hf_hub_download
+@wraps(original_hf_hub_download)
+def _hf_hub_download_wrapper(*args, **kwargs):
+    if "use_auth_token" in kwargs:
+        kwargs["token"] = kwargs.pop("use_auth_token")
+    return original_hf_hub_download(*args, **kwargs)
+
+# パッチの適用
+huggingface_hub.hf_hub_download = _hf_hub_download_wrapper
+# ------------------------------------
+
+
 def _initialize_pipelines():
     """Initializes and loads the pyannote pipelines if they haven't been loaded yet."""
-    global _diarization_pipeline, _embedding_model, _device
-    
+    global _diarization_pipeline, _embedding_model, _device     
     if _diarization_pipeline is not None:
         return
-
-    # Lazy import of heavy libraries
-    import torch
-    from pyannote.audio import Pipeline, Inference, Model
+    
+    # [FIX] PyTorch >= 2.6 の安全なロードのためのカスタムグローバルを追加
+    if hasattr(torch, "serialization") and hasattr(torch.serialization, "add_safe_globals"):
+        print("Adding pyannote custom classes to torch's safe globals...")
+        # 💡 新しい修正ポイント: Introspection を追加
+        torch.serialization.add_safe_globals([
+            torch.torch_version.TorchVersion,
+            Specifications,
+            Problem,
+            Resolution, 
+            Introspection, # <<< これを追加
+            EarlyStopping, 
+            ModelCheckpoint,
+            ListConfig,
+            ContainerMetadata,
+            Metadata,
+            DictConfig,
+            AnyNode, 
+            Any,
+            list,
+            defaultdict,
+            dict,
+            int
+        ])
 
     load_dotenv()
     hf_token = os.getenv("HUGGING_FACE_TOKEN")
@@ -24,19 +74,22 @@ def _initialize_pipelines():
         raise ValueError("HUGGING_FACE_TOKEN not found in .env file. Please add it.")
 
     print("Loading speaker diarization pipeline for the first time...")
-    # For pyannote.audio 3.x
     _diarization_pipeline = Pipeline.from_pretrained(
         "pyannote/speaker-diarization-3.1",
-        token=hf_token
+        use_auth_token=hf_token 
     )
     print("Loading speaker embedding model for the first time...")
-    model = Model.from_pretrained("pyannote/embedding", token=hf_token)
+    model = Model.from_pretrained(
+        "pyannote/embedding",
+        use_auth_token=hf_token
+    )
     _embedding_model = Inference(model, window="whole")
 
     _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     _diarization_pipeline.to(_device)
     _embedding_model.to(_device)
     print(f"Pipelines loaded on device: {_device}")
+
 
 def perform_diarization(audio_path: str) -> tuple[list, dict]:
     """
@@ -49,7 +102,7 @@ def perform_diarization(audio_path: str) -> tuple[list, dict]:
     Returns:
         A tuple containing:
         - A list of speaker segments.
-        - A dictionary mapping speaker labels to their average embedding vectors.
+        - - A dictionary mapping speaker labels to their average embedding vectors.
     """
     # 1. Ensure models are loaded
     _initialize_pipelines()
@@ -64,11 +117,6 @@ def perform_diarization(audio_path: str) -> tuple[list, dict]:
     print("Diarization complete.")
 
     # 4. Extract speaker embeddings
-    import torch
-    import numpy as np
-    from pyannote.audio.core.io import Audio
-    from pyannote.core import Segment
-    
     print("Extracting speaker embeddings...")
     try:
         audio_loader = Audio(sample_rate=16000, mono=True)
@@ -80,6 +128,7 @@ def perform_diarization(audio_path: str) -> tuple[list, dict]:
             
             embeddings_list = []
             for turn in speaker_turns:
+                # セグメントの境界がファイルの長さを超えないように調整
                 if turn.end > file_duration:
                     turn = Segment(turn.start, file_duration)
                 
