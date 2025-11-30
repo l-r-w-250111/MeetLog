@@ -1,5 +1,6 @@
 import os
 import argparse
+import warnings
 from dotenv import load_dotenv
 
 # --- Globals for expensive models ---
@@ -19,24 +20,64 @@ def _initialize_pipelines():
     from pyannote.audio import Pipeline, Inference, Model
 
     load_dotenv()
-    hf_token = os.getenv("HUGGING_FACE_TOKEN")
-    if not hf_token:
+    if not os.getenv("HUGGING_FACE_TOKEN"):
         raise ValueError("HUGGING_FACE_TOKEN not found in .env file. Please add it.")
 
-    print("Loading speaker diarization pipeline for the first time...")
-    # For pyannote.audio 3.x
-    _diarization_pipeline = Pipeline.from_pretrained(
-        "pyannote/speaker-diarization-3.1",
-        token=hf_token
-    )
-    print("Loading speaker embedding model for the first time...")
-    model = Model.from_pretrained("pyannote/embedding", token=hf_token)
-    _embedding_model = Inference(model, window="whole")
+    # Determine device, with a fallback to CPU for robustness
+    try:
+        if torch.cuda.is_available():
+            _device = torch.device("cuda")
+            # Simple check to confirm CUDA is responsive
+            _ = torch.tensor([1.0]).to(_device)
+        else:
+            _device = torch.device("cpu")
+    except Exception as e:
+        warnings.warn(
+            f"CUDA device check failed with error: {e}. "
+            "Falling back to CPU. This may be slow."
+        )
+        _device = torch.device("cpu")
 
-    _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    _diarization_pipeline.to(_device)
-    _embedding_model.to(_device)
-    print(f"Pipelines loaded on device: {_device}")
+    print(f"Attempting to load models on device: '{_device}'...")
+
+    try:
+        # Load models and move to the selected device
+        print("Loading speaker diarization pipeline...")
+        # For pyannote.audio 4.x, auth token is handled by huggingface-hub
+        # Using the v4 compatible community model
+        _diarization_pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-community-1")
+        _diarization_pipeline.to(_device)
+
+        print("Loading speaker embedding model...")
+        model = Model.from_pretrained("pyannote/embedding")
+        _embedding_model = Inference(model, window="whole")
+        _embedding_model.to(_device)
+
+    except Exception as e:
+        # If loading on GPU fails, try falling back to CPU
+        if _device.type == 'cuda':
+            warnings.warn(
+                f"Failed to load models on CUDA with error: {e}. "
+                "Attempting to fall back to CPU."
+            )
+            _device = torch.device("cpu")
+            try:
+                _diarization_pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-community-1")
+                _diarization_pipeline.to(_device)
+
+                model = Model.from_pretrained("pyannote/embedding")
+                _embedding_model = Inference(model, window="whole")
+                _embedding_model.to(_device)
+            except Exception as cpu_e:
+                raise RuntimeError(
+                    "Failed to load pyannote.audio models on both CUDA and CPU. "
+                    f"CUDA error: {e}, CPU error: {cpu_e}"
+                )
+        else:
+            # If it fails on CPU, there's no fallback
+            raise RuntimeError(f"Failed to load pyannote.audio models on CPU: {e}")
+
+    print(f"Pipelines loaded successfully on device: '{_device}'")
 
 def perform_diarization(audio_path: str) -> tuple[list, dict]:
     """
