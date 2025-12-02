@@ -146,7 +146,7 @@ python main.py path/to/your/audio.wav --model large
 -   **`ffmpeg` Errors**: If you get errors related to reading audio files, it's likely `ffmpeg` is not installed correctly or not in your system's `PATH`. Please revisit the "Prerequisites" section.
 -   **GPU Not Used**: If the console shows "Using CPU...", ensure you have an NVIDIA GPU, the latest drivers, and the correct CUDA-enabled version of PyTorch installed.
 -   **Hugging Face Errors (401 Unauthorized)**: This usually means your access token is incorrect or you haven't accepted the user conditions for all three `pyannote` models listed in Step 4.2.
-
+-   **`subtype is unknown to TorchAudio` Errors**: Complete silence segments introduced by algorithms will cause an error. Use an editor (e.g., Audacity's Effect > Special > Truncate Silence) to remove them.
 ---
 ## 📝 License
 This project is licensed under the terms of the [MIT License](LICENSE).
