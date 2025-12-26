@@ -39,10 +39,35 @@ huggingface_hub.hf_hub_download = _hf_hub_download_wrapper
 
 def _initialize_pipelines():
     """Initializes and loads the pyannote pipelines if they haven't been loaded yet."""
-    global _diarization_pipeline, _embedding_model, _device     
+    global _diarization_pipeline, _embedding_model, _device
     if _diarization_pipeline is not None:
         return
-    
+
+    # --- PyTorch/CUDA Diagnostic ---
+    print("\n--- PyTorch/CUDA Diagnostic (diarize.py) ---")
+    print(f"PyTorch Version: {torch.__version__}")
+    cuda_available = torch.cuda.is_available()
+    print(f"CUDA Available: {cuda_available}")
+    if cuda_available:
+        print(f"Number of GPUs: {torch.cuda.device_count()}")
+        print(f"Current GPU Name: {torch.cuda.get_device_name(torch.cuda.current_device())}")
+    print("--------------------------------------------\n")
+    # --- End Diagnostic ---
+
+    # [FIX] pyannote.audio/torchaudio compatibility patch for torchaudio > 2.2.0
+    # This is necessary because pyannote.audio 3.4.0 expects AudioDecoder in a
+    # different location than where it is in modern torchaudio versions.
+    try:
+        import torchaudio.io
+        from torchcodec.decoders import AudioDecoder
+        torchaudio.io.AudioDecoder = AudioDecoder
+        print("Successfully applied torchcodec compatibility patch.")
+    except (ImportError, RuntimeError) as e:
+        # If torchcodec is not installed or FFmpeg is missing, this will fail.
+        # We print a warning but allow the app to continue, as transcription
+        # might still work even if diarization is broken.
+        print(f"Warning: Could not apply torchcodec patch. Diarization may fail. Error: {e}")
+
     # [FIX] PyTorch >= 2.6 の安全なロードのためのカスタムグローバルを追加
     if hasattr(torch, "serialization") and hasattr(torch.serialization, "add_safe_globals"):
         print("Adding pyannote custom classes to torch's safe globals...")
@@ -74,13 +99,24 @@ def _initialize_pipelines():
     print("Loading speaker diarization pipeline for the first time...")
     _diarization_pipeline = Pipeline.from_pretrained(
         "pyannote/speaker-diarization-3.1",
-        use_auth_token=hf_token 
+        use_auth_token=hf_token
     )
+    if _diarization_pipeline is None:
+        print("Error: Failed to load the diarization pipeline. Check token or network.")
+        # We don't raise here, but let perform_diarization handle the None pipeline
+        return
+
     print("Loading speaker embedding model for the first time...")
     model = Model.from_pretrained(
         "pyannote/embedding",
         use_auth_token=hf_token
     )
+    if model is None:
+        print("Error: Failed to load the embedding model. Check token or network.")
+        # Mark pipeline as unusable
+        _diarization_pipeline = None 
+        return
+
     _embedding_model = Inference(model, window="whole")
 
     _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -109,47 +145,73 @@ def perform_diarization(audio_path: str) -> tuple[list, dict]:
     if not os.path.exists(audio_path):
         raise FileNotFoundError(f"Audio file not found at: {audio_path}")
 
-    # 3. Apply diarization
-    print(f"Applying diarization to '{os.path.basename(audio_path)}'...")
-    diarization_result = _diarization_pipeline(audio_path)
-    print("Diarization complete.")
+    # 3. Apply diarization with error handling
+    try:
+        print(f"Applying diarization to '{os.path.basename(audio_path)}'...")
+        if _diarization_pipeline is None:
+            raise RuntimeError("Diarization pipeline is not initialized, likely due to a torchcodec/FFmpeg error.")
+        
+        # Run the pipeline
+        result = _diarization_pipeline(audio_path)
+        
+        # [FIX] Handle different return types from pyannote pipeline.
+        # Sometimes it returns a container with an .annotation attribute,
+        # and sometimes (e.g., for MP3s) it returns the annotation object directly.
+        if hasattr(result, 'annotation'):
+            diarization_result = result.annotation
+        else:
+            diarization_result = result
+            
+        print("Diarization complete.")
+    except Exception as e:
+        # This can happen with very short audio files or if the pipeline fails
+        print(f"Warning: Diarization failed. Returning empty result. Error: {e}")
+        return [], {}
 
     # 4. Extract speaker embeddings
     print("Extracting speaker embeddings...")
     try:
         audio_loader = Audio(sample_rate=16000, mono=True)
         file_duration = audio_loader.get_duration(audio_path)
-        
+
         speaker_embeddings = {}
+        # Use the annotation object from the container
         for speaker_label in diarization_result.labels():
             speaker_turns = diarization_result.label_timeline(speaker_label)
-            
+
             embeddings_list = []
             for turn in speaker_turns:
-                # セグメントの境界がファイルの長さを超えないように調整
+                # Adjust segment boundaries to not exceed file duration
                 if turn.end > file_duration:
                     turn = Segment(turn.start, file_duration)
-                
+
                 if turn.duration <= 0:
                     continue
 
                 chunk, sr = audio_loader.crop(audio_path, turn)
-                
                 embedding_input = {"waveform": chunk.to(_device), "sample_rate": sr}
-                
+
                 embedding_windows = _embedding_model(embedding_input)
-                embedding = np.mean(embedding_windows.data, axis=0)
+                
+                # [FIX] Handle both 1D and 2D arrays robustly
+                embedding_data = np.asarray(embedding_windows.data)
+                if embedding_data.ndim == 1:
+                    embedding = embedding_data.astype(np.float32)
+                else:
+                    embedding = np.mean(embedding_data, axis=0).astype(np.float32)
                 embeddings_list.append(embedding)
-            
+
             if embeddings_list:
-                speaker_embeddings[speaker_label] = np.mean(embeddings_list, axis=0)
-        
+                # This part should be fine as embeddings_list will contain 1D arrays
+                speaker_embeddings[speaker_label] = np.mean(embeddings_list, axis=0).astype(np.float32)
+
         print(f"Extracted embeddings for {len(speaker_embeddings)} speakers.")
 
     except Exception as e:
+        # This is a critical failure, as transcription depends on it.
         raise RuntimeError(f"Failed during speaker embedding extraction: {e}")
 
-    # 5. Process segments
+    # 5. Process segments from the annotation object
     segments = []
     for turn, _, speaker in diarization_result.itertracks(yield_label=True):
         segments.append({
@@ -157,7 +219,7 @@ def perform_diarization(audio_path: str) -> tuple[list, dict]:
             'end': turn.end,
             'speaker': speaker
         })
-        
+
     return segments, speaker_embeddings
 
 if __name__ == '__main__':

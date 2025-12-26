@@ -24,24 +24,19 @@ def list_input_devices() -> dict:
 
 class AudioRecorder:
     """
-    A class to handle real-time audio recording using sounddevice.
+    A class to handle real-time audio recording using sounddevice in a separate
+    daemon thread to prevent the main application from hanging on exit.
     """
     def __init__(self, device_index: int, sample_rate: int = SAMPLE_RATE):
-        """
-        Initializes the recorder.
-
-        Args:
-            device_index (int): The index of the audio device to use.
-            sample_rate (int): The sample rate for the recording.
-        """
         self.device_index = device_index
         self.sample_rate = sample_rate
         self.is_recording = False
-        self.stream = None
         self.audio_buffer = []
-        self.latest_volume = 0.0  # To store the volume of the most recent chunk
+        self.latest_volume = 0.0
         self.lock = threading.Lock()
-        self._processed_chunks_count = 0 # To track chunks for the new method
+        self._processed_chunks_count = 0
+        self.stop_event = threading.Event()
+        self.thread = None
 
     def _callback(self, indata: np.ndarray, frames: int, time, status):
         """
@@ -56,9 +51,26 @@ class AudioRecorder:
             volume_rms = np.sqrt(np.mean(indata**2))
             self.latest_volume = float(volume_rms)
 
+    def _record_loop(self):
+        """The main loop for the recording thread."""
+        try:
+            with sd.InputStream(
+                samplerate=self.sample_rate,
+                device=self.device_index,
+                channels=1,
+                dtype='float32',
+                callback=self._callback
+            ) as stream:
+                print("Recording thread started.")
+                # Wait until the stop event is set
+                self.stop_event.wait()
+            print("Recording stream finished.")
+        except Exception as e:
+            print(f"Error in recording thread: {e}")
+
     def start(self):
         """
-        Starts the audio recording.
+        Starts the audio recording in a separate daemon thread.
         """
         if self.is_recording:
             print("Already recording.")
@@ -67,30 +79,31 @@ class AudioRecorder:
         print(f"Starting recording on device {self.device_index}...")
         self.audio_buffer = []
         self._processed_chunks_count = 0
-        self.stream = sd.InputStream(
-            samplerate=self.sample_rate,
-            device=self.device_index,
-            channels=1,
-            dtype='float32',
-            callback=self._callback
-        )
-        self.stream.start()
+        self.stop_event.clear()
+        
+        # [FIX] Run the recording loop in a daemon thread
+        self.thread = threading.Thread(target=self._record_loop, daemon=True)
+        self.thread.start()
+        
         self.is_recording = True
         print("Recording started.")
 
     def stop(self):
         """
-        Stops the audio recording.
+        Stops the audio recording by signaling the thread to exit.
         """
         if not self.is_recording:
             print("Not currently recording.")
             return
 
         print("Stopping recording...")
-        if self.stream:
-            self.stream.stop()
-            self.stream.close()
-            self.stream = None
+        self.stop_event.set() # Signal the thread to stop
+        if self.thread:
+            self.thread.join(timeout=2) # Wait for the thread to finish
+            if self.thread.is_alive():
+                print("Warning: Recording thread did not terminate cleanly.")
+            self.thread = None
+            
         self.is_recording = False
         print("Recording stopped.")
 

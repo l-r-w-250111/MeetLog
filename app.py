@@ -2,9 +2,9 @@ import streamlit as st
 import os
 import tempfile
 import time
+import numpy as np
 from main import create_transcript, recognize_speakers
 from speaker_manager import save_profile, load_profiles, update_profiles_status
-from audio_recorder import list_input_devices, AudioRecorder
 from realtime_transcriber import RealtimeTranscriber
 
 # --- Constants ---
@@ -58,15 +58,26 @@ def handle_processing():
     It should be called BEFORE any UI is drawn.
     """
     if st.session_state.app_state == 'processing_file':
+        # This block handles the audio file processing.
+        # We now pass the uploaded file directly to the backend without explicit conversion,
+        # as the processing pipeline can handle various audio formats directly.
         with st.spinner('Processing file...'):
             try:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(st.session_state.uploaded_file_name)[1]) as tmp_file:
-                    tmp_path = tmp_file.name
-                    tmp_file.write(st.session_state.uploaded_file_data)
+                # Create a temporary file with the correct extension
+                file_name = st.session_state.uploaded_file_name
+                file_data = st.session_state.uploaded_file_data
                 
+                with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_name)[1]) as tmp_file:
+                    tmp_path = tmp_file.name
+                    tmp_file.write(file_data)
+
+                # Call the main transcript creation function
                 transcript, unrecognized, label_map = create_transcript(tmp_path, st.session_state.model_size)
                 st.session_state.transcript_data = transcript
-                st.session_state.unrecognized_speakers = unrecognized
+                # [FIX] Convert numpy arrays to lists before storing in session state
+                st.session_state.unrecognized_speakers = {
+                    key: value.tolist() for key, value in unrecognized.items()
+                }
                 st.session_state.speaker_name_map = label_map
                 st.success("File processing complete!")
             except Exception as e:
@@ -90,7 +101,10 @@ def handle_processing():
                 try:
                     transcript, unrecognized, label_map = st.session_state.transcriber.process_final_audio(st.session_state.recorder)
                     st.session_state.transcript_data = transcript
-                    st.session_state.unrecognized_speakers = unrecognized
+                    # [FIX] Convert numpy arrays to lists before storing in session state (for real-time mode)
+                    st.session_state.unrecognized_speakers = {
+                        key: value.tolist() for key, value in unrecognized.items()
+                    }
                     st.session_state.speaker_name_map = label_map
                     st.success("Final transcript ready!")
                 except Exception as e:
@@ -166,6 +180,9 @@ def draw_file_upload_tab(is_disabled):
             st.warning("Please upload an audio file.")
 
 def draw_realtime_tab(is_disabled):
+    # [FIX] Lazy-load the audio recorder to prevent startup hangs.
+    from audio_recorder import list_input_devices, AudioRecorder
+    
     try:
         input_devices = list_input_devices()
         device_options = list(input_devices.keys())
@@ -260,8 +277,10 @@ def draw_results_and_naming():
                     for label in list(st.session_state.unrecognized_speakers.keys()):
                         new_name = st.session_state.get(f"name_for_{label}")
                         if new_name:
-                            embedding = st.session_state.unrecognized_speakers[label]
-                            save_profile(new_name, embedding)
+                            # [FIX] Convert list from session state back to numpy array before saving
+                            embedding_list = st.session_state.unrecognized_speakers[label]
+                            embedding_array = np.array(embedding_list, dtype=np.float32)
+                            save_profile(new_name, embedding_array)
                             st.session_state.speaker_name_map[label] = new_name
                             saved_count += 1
                             speakers_to_remove.append(label)

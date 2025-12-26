@@ -25,13 +25,14 @@ Never forget who said what in a meeting again!
 Before you begin, ensure you have the following installed on your system:
 
 -   **Python 3.8+**
--   **ffmpeg**: This is essential for audio processing.
+-   **FFmpeg**: This is a critical dependency for audio decoding, used by libraries like `pydub` and `torchcodec`.
+    -   **Supported Versions**: 4, 5, 6, or 7.
     -   **macOS (via Homebrew):** `brew install ffmpeg`
     -   **Ubuntu/Debian:** `sudo apt-get install ffmpeg`
-    -   **Windows:**
-        1.  Download a build from the [ffmpeg official website](https://ffmpeg.org/download.html) (e.g., from `gyan.dev`).
-        2.  Unzip the downloaded file.
-        3.  Add the path to the `bin` folder (e.g., `C:\ffmpeg\bin`) to your system's `Path` environment variable.
+    -   **Windows (Important):**
+        1.  Download a **shared build** from the [ffmpeg official website](https://ffmpeg.org/download.html) (e.g., from `gyan.dev`). The "shared" version contains the necessary `.dll` files.
+        2.  Unzip the downloaded file to a permanent location (e.g., `C:\ffmpeg`).
+        3.  Add the path to the `bin` folder inside the unzipped directory (e.g., `C:\ffmpeg\bin`) to your system's **`Path` environment variable**. This is required for `torchcodec` to find the FFmpeg libraries.
 -   **A Hugging Face Account**: Required to access the pre-trained models from `pyannote.audio`. You can sign up for free at [huggingface.co](https://huggingface.co/).
 
 ---
@@ -69,14 +70,26 @@ Install all necessary Python packages from the `requirements.txt` file.
 ```bash
 pip install -r requirements.txt
 ```
-**(Optional) For NVIDIA GPU Users:** If you have a CUDA-compatible NVIDIA GPU, you can significantly speed up processing. Install the CUDA-enabled version of PyTorch:
-```bash
-# First, uninstall the default CPU versions
-pip uninstall torch torchaudio
-# Then, install the CUDA version (example for CUDA 12.1)
-pip install torch==2.3.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu121
-```
-*Find the correct command for your specific CUDA version on the [PyTorch website](https://pytorch.org/get-started/locally/).*
+
+### (Optional) GPU / CUDA Acceleration Setup
+
+This application is designed to automatically prioritize using a GPU (NVIDIA CUDA) if it is available on your system, which significantly speeds up both diarization and transcription. If a compatible GPU is not found, it will seamlessly fall back to using the CPU.
+
+For GPU support, you must install the CUDA-enabled version of PyTorch and ensure your NVIDIA drivers are up to date.
+
+1.  **Install NVIDIA Drivers**: Make sure you have the latest drivers for your NVIDIA GPU.
+2.  **Install CUDA-enabled PyTorch**: The `requirements.txt` file installs the CPU-only version of PyTorch by default for maximum compatibility. To enable GPU support, you must install the correct version of PyTorch for your system. For this project, which uses PyTorch 2.8.0, the recommended command is:
+
+    ```bash
+    # Uninstall the CPU-only versions first to avoid conflicts
+    pip uninstall torch torchaudio torchcodec
+    
+    # Install the CUDA-enabled version (this example is for CUDA 12.1)
+    pip install torch==2.8.0 torchaudio==2.8.0 torchcodec==0.7.0 --index-url https://download.pytorch.org/whl/cu121
+    ```
+    *Note: You may need to adjust the command based on your specific CUDA version. Please refer to the [official PyTorch website's previous versions page](https://pytorch.org/get-started/previous-versions/) for the correct command for your environment.*
+
+The application will print detailed information about your PyTorch and CUDA setup to the console on startup to help you verify that your GPU is being correctly detected.
 
 ### 4. Set Up Your Hugging Face Access Token 🔑
 

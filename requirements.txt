@@ -1,23 +1,24 @@
 # --- PyTorch / audio backend ---
 torch==2.8.0
 torchaudio==2.8.0
+torchcodec==0.7.0
 
-# --- pyannote  ---
+# --- pyannote ---
 pyannote.audio==3.4.0
+omegaconf==2.3.0
 
 # --- audio recording ---
 pydub==0.25.1
-soundfile          
+soundfile
 numpy==1.26.4
-scipy>=1.9.0       
-librosa>=0.9.2      
+scipy>=1.9.0
+librosa>=0.9.2
 
-# --- ---
-openai-whisper==20231117  
+# --- Transcription ---
+faster-whisper
 
-# ---  ---
-streamlit==1.37.0  
-python-dotenv  
-sounddevice            
+# --- UI & Utilities ---
+streamlit==1.37.0
+python-dotenv
+sounddevice
 huggingface_hub==0.19.4
-PyAudio                 # Windows 

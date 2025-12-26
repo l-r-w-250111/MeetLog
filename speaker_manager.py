@@ -4,6 +4,20 @@ import numpy as np
 
 PROFILES_FILE = "speaker_profiles.json"
 
+class NumpyEncoder(json.JSONEncoder):
+    """
+    Custom JSON encoder for numpy types.
+    Converts numpy integers, floats, and arrays to their Python equivalents.
+    """
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super(NumpyEncoder, self).default(obj)
+
 def load_profiles() -> dict:
     """
     Loads speaker profiles from the JSON file with UTF-8 encoding.
@@ -16,13 +30,11 @@ def load_profiles() -> dict:
                 # Convert embedding lists back to numpy arrays and ensure 'is_active' exists
                 for name, data in profiles.items():
                     if 'embedding' in data and isinstance(data['embedding'], list):
-                        data['embedding'] = np.array(data['embedding'])
-                    # For backward compatibility, default is_active to True if not present
+                        data['embedding'] = np.array(data['embedding'], dtype=np.float32)
                     if 'is_active' not in data:
                         data['is_active'] = True
                 return profiles
         except (json.JSONDecodeError, UnicodeDecodeError):
-            # If file is corrupted or not valid UTF-8, handle it gracefully
             print(f"Warning: Could not decode {PROFILES_FILE}. It might be corrupted. Starting with empty profiles.")
             return {}
     return {}
@@ -30,19 +42,10 @@ def load_profiles() -> dict:
 def _save_profiles_to_file(profiles: dict):
     """
     Internal helper to save the complete profiles dictionary to a file,
-    handling serialization and ensuring UTF-8 encoding.
+    using a custom NumpyEncoder to handle numpy data types.
     """
-    profiles_to_save = {}
-    for speaker_name, data in profiles.items():
-        # Create a copy to avoid modifying the original dict in memory
-        data_to_save = data.copy()
-        # Ensure embedding is a list before saving
-        if 'embedding' in data_to_save and isinstance(data_to_save['embedding'], np.ndarray):
-            data_to_save['embedding'] = data_to_save['embedding'].tolist()
-        profiles_to_save[speaker_name] = data_to_save
-            
     with open(PROFILES_FILE, 'w', encoding='utf-8') as f:
-        json.dump(profiles_to_save, f, indent=4, ensure_ascii=False)
+        json.dump(profiles, f, indent=4, ensure_ascii=False, cls=NumpyEncoder)
 
 def save_profile(name: str, embedding: np.ndarray):
     """
@@ -51,7 +54,6 @@ def save_profile(name: str, embedding: np.ndarray):
     """
     profiles = load_profiles()
     
-    # Add or update the profile for the new speaker, defaulting is_active to True
     profiles[name] = {"embedding": embedding, "is_active": True}
     
     _save_profiles_to_file(profiles)
@@ -74,9 +76,12 @@ def update_profiles_status(statuses: dict):
 def cosine_similarity(emb1: np.ndarray, emb2: np.ndarray) -> float:
     """
     Calculates the cosine similarity between two embedding vectors.
+    Ensures both embeddings are float32 to prevent dtype mismatch issues.
     """
-    emb1 = emb1.astype(float)
-    emb2 = emb2.astype(float)
+    # [FIX] Force conversion to float32 to avoid potential dtype mismatches
+    # (e.g., comparing float64 from live processing with float32 from loaded file)
+    emb1 = emb1.astype(np.float32)
+    emb2 = emb2.astype(np.float32)
     
     dot_product = np.dot(emb1, emb2)
     norm_emb1 = np.linalg.norm(emb1)
@@ -98,7 +103,8 @@ def find_matching_speaker(new_embedding: np.ndarray, profiles: dict, threshold: 
         saved_embedding = data.get('embedding')
         if saved_embedding is not None:
             if isinstance(saved_embedding, list):
-                saved_embedding = np.array(saved_embedding)
+                # This case should ideally not be hit if load_profiles is always used
+                saved_embedding = np.array(saved_embedding, dtype=np.float32)
             
             similarity = cosine_similarity(new_embedding, saved_embedding)
             
